@@ -1,0 +1,71 @@
+FROM php:5.6-fpm-stretch
+
+ENV REDIS_VERSION 2.2.8
+
+COPY docker-entrypoint.sh /docker-custom-entrypoint.sh
+COPY config/global.conf /usr/local/etc/php-fpm.d/zz-global.conf
+COPY config/xdebug2.ini /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+
+RUN apt-get update && apt-get install -y \
+    nano msmtp sendmail \
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libicu-dev \
+    libxml2-dev \
+    libxslt-dev \
+    libzip-dev \
+    libmcrypt-dev \
+    libmagickwand-dev \
+    --no-install-recommends \
+    && docker-php-ext-configure gd \
+        --with-gd \
+        --with-freetype-dir=/usr/include/ \
+        --with-png-dir=/usr/include/ \
+        --with-jpeg-dir=/usr/include/ \
+    && curl -L -o /tmp/redis.tar.gz https://github.com/phpredis/phpredis/archive/$REDIS_VERSION.tar.gz \
+    && tar xfz /tmp/redis.tar.gz \
+    && rm -r /tmp/redis.tar.gz \
+    && mv phpredis-* /usr/src/php/ext/redis \
+    && docker-php-ext-install mcrypt gd opcache bcmath pdo_mysql soap zip xsl intl sockets mysqli pcntl redis \
+    && pecl install xdebug-2.5.5 imagick  \
+    && docker-php-ext-enable redis imagick \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin --version=1.10.21 --filename=composer \
+    && ln -s /usr/local/bin/php /usr/bin/php \
+
+    # install blackfire
+    && version=$(php -r "echo PHP_MAJOR_VERSION.PHP_MINOR_VERSION;") \
+    && architecture=$(case $(uname -m) in i386 | i686 | x86) echo "i386" ;; x86_64 | amd64) echo "amd64" ;; aarch64 | arm64 | armv8) echo "arm64" ;; *) echo "amd64" ;; esac) \
+    && curl -A "Docker" -o /tmp/blackfire-probe.tar.gz -D - -L -s https://blackfire.io/api/v1/releases/probe/php/linux/$architecture/$version \
+    && mkdir -p /tmp/blackfire \
+    && tar zxpf /tmp/blackfire-probe.tar.gz -C /tmp/blackfire \
+    && mv /tmp/blackfire/blackfire-*.so $(php -r "echo ini_get ('extension_dir');")/blackfire.so \
+    # end
+
+    # install ioncube
+    && cd /tmp \
+    && curl -O https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz \
+    && tar zxvf ioncube_loaders_lin_x86-64.tar.gz \
+    && export PHP_VERSION=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;") \
+    && export PHP_EXT_DIR=$(php-config --extension-dir) \
+    && cp "./ioncube/ioncube_loader_lin_${PHP_VERSION}.so" "${PHP_EXT_DIR}/ioncube.so" \
+    # end
+
+    && chmod +x /docker-custom-entrypoint.sh \
+
+    && sed -i 's/^listen = .*/listen = \/var\/run\/php\/php56.sock/' /usr/local/etc/php-fpm.d/zz-docker.conf \
+    && sed -i 's/^;listen.owner = .*/listen.owner = www-data/' /usr/local/etc/php-fpm.d/www.conf \
+    && sed -i 's/^;listen.group = .*/listen.group = www-data/' /usr/local/etc/php-fpm.d/www.conf \
+    && sed -i 's/^;listen.mode = .*/listen.mode = 0660/' /usr/local/etc/php-fpm.d/www.conf \
+    && sed -i 's/^pm = .*/pm = ondemand/' /usr/local/etc/php-fpm.d/www.conf \
+    && sed -i 's/^pm.max_children = .*/pm.max_children = 10/' /usr/local/etc/php-fpm.d/www.conf \
+    && sed -i 's/^;request_slowlog_timeout = .*/request_slowlog_timeout = 10s/' /usr/local/etc/php-fpm.d/www.conf \
+    && sed -i 's/^;slowlog = .*/slowlog = \/var\/log\/php-fpm\/php56-slow.log/' /usr/local/etc/php-fpm.d/www.conf \
+    && mkdir -p /var/log/php-fpm/ \
+    && mkdir -p /var/run/php/ \
+    
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+ENTRYPOINT ["/docker-custom-entrypoint.sh"]
+
+CMD ["php-fpm"]

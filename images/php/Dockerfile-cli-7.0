@@ -1,0 +1,100 @@
+FROM php:7.0-cli-stretch
+
+COPY docker-entrypoint-cli.sh /docker-custom-entrypoint.sh
+COPY config/xdebug2.ini /usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini
+
+RUN apt-get update && apt-get install -y \
+    curl wget zip unzip htop rsync \
+    git default-mysql-client openssh-client cron patch \
+    nano vim msmtp sendmail \
+    jpegoptim optipng gifsicle webp \
+    libfreetype6-dev \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libicu-dev \
+    libxml2-dev \
+    libxslt-dev \
+    libzip-dev \
+    libmcrypt-dev \
+    libmagickwand-dev \
+    --no-install-recommends \
+    && docker-php-ext-configure gd \
+        --with-gd \
+        --with-freetype-dir=/usr/include/ \
+        --with-png-dir=/usr/include/ \
+        --with-jpeg-dir=/usr/include/ \
+    && docker-php-ext-install mcrypt gd opcache bcmath pdo_mysql soap zip xsl intl sockets mysqli pcntl \
+
+    # set password for user root
+    && echo 'root:root' |chpasswd \
+
+    # create user dev
+    && useradd -ms /bin/bash dev \
+
+    # install nodejs
+    && cd /tmp \
+    && curl -sL https://deb.nodesource.com/setup_12.x -o nodesource_setup.sh \
+    && bash nodesource_setup.sh \
+    && apt-get install -y nodejs --no-install-recommends \
+    && npm install -g requirejs grunt-cli gulp yarn eslint jscs jscs-stylish \
+
+    && cd / \
+    && pecl install xdebug-2.7.2 redis imagick \
+    && docker-php-ext-enable redis imagick \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin --version=1.10.21 --filename=composer \
+    && ln -s /usr/local/bin/php /usr/bin/php \
+
+    # install blackfire extension
+    && version=$(php -r "echo PHP_MAJOR_VERSION.PHP_MINOR_VERSION;") \
+    && architecture=$(case $(uname -m) in i386 | i686 | x86) echo "i386" ;; x86_64 | amd64) echo "amd64" ;; aarch64 | arm64 | armv8) echo "arm64" ;; *) echo "amd64" ;; esac) \
+    && curl -A "Docker" -o /tmp/blackfire-probe.tar.gz -D - -L -s https://blackfire.io/api/v1/releases/probe/php/linux/$architecture/$version \
+    && mkdir -p /tmp/blackfire \
+    && tar zxpf /tmp/blackfire-probe.tar.gz -C /tmp/blackfire \
+    && mv /tmp/blackfire/blackfire-*.so $(php -r "echo ini_get ('extension_dir');")/blackfire.so \
+    # end
+
+    # install blackfire
+    && mkdir -p /tmp/blackfire \
+    && architecture=$(case $(uname -m) in i386 | i686 | x86) echo "i386" ;; x86_64 | amd64) echo "amd64" ;; aarch64 | arm64 | armv8) echo "arm64" ;; *) echo "amd64" ;; esac) \
+    && curl -A "Docker" -L https://blackfire.io/api/v1/releases/client/linux/$architecture | tar zxp -C /tmp/blackfire \
+    && mv /tmp/blackfire/blackfire /usr/bin/blackfire \
+    && rm -Rf /tmp/blackfire \
+    # end
+
+    # install ioncube
+    && cd /tmp \
+    && curl -O https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz \
+    && tar zxvf ioncube_loaders_lin_x86-64.tar.gz \
+    && export PHP_VERSION=$(php -r "echo PHP_MAJOR_VERSION.'.'.PHP_MINOR_VERSION;") \
+    && export PHP_EXT_DIR=$(php-config --extension-dir) \
+    && cp "./ioncube/ioncube_loader_lin_${PHP_VERSION}.so" "${PHP_EXT_DIR}/ioncube.so" \
+    # end
+
+    # install n98-magerun2
+    && wget https://files.magerun.net/n98-magerun2.phar -P /usr/local/bin \
+    && chmod +x /usr/local/bin/n98-magerun2.phar \
+    # end
+
+    # install redis cli
+    && cd /tmp \
+    && wget http://download.redis.io/redis-stable.tar.gz \
+    && mkdir -p /usr/src/redis \
+    && tar -xzf redis-stable.tar.gz -C /usr/src/redis --strip-components=1 \
+    && make -C /usr/src/redis install redis-cli /usr/bin \
+    && rm -rf /usr/src/redis \
+    # end
+
+    && chmod +x /docker-custom-entrypoint.sh \
+
+    && git config --system core.fileMode false \
+    && git config --system core.autocrlf false \
+    && git config --system core.eol input \
+    && git config --system credential.helper cache \
+    && git config --system credential.helper 'cache --timeout=7200' \
+    
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+ENTRYPOINT ["/docker-custom-entrypoint.sh"]
+
+CMD ["bash"]
